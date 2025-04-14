@@ -1,6 +1,7 @@
 use std::io;
 use std::io::Write;
 use rpassword::read_password;
+use crate::utils::input;
 
 pub fn input(prompt: &str) -> String {
     println!("{}", prompt);
@@ -17,7 +18,11 @@ pub fn input_trim(prompt: &str) -> String {
 
 pub fn input_password(prompt: &str) -> String {
     println!("{}", prompt);
-    read_password().unwrap().to_string()
+    let pass = read_password();
+    if pass.is_ok() {
+        return pass.unwrap()
+    }
+    input("")
 }
 
 pub fn input_password_trim(prompt: &str) -> String {

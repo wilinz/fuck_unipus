@@ -5,4 +5,6 @@ use serde::{Deserialize, Serialize};
 pub struct SessionInfo {
     pub name: String,
     pub token: String,
+    pub openid: String,
+    pub websocket_url: String,
 }

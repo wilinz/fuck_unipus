@@ -21,6 +21,7 @@ use std::io::BufWriter;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
+use http::{HeaderName, HeaderValue};
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
@@ -43,8 +44,32 @@ pub struct Unipus {
 
 impl Unipus {
     pub fn new(username: &str) -> Self {
-        let mut headers = HeaderMap::new();
-        headers.insert(USER_AGENT, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36".parse().unwrap());
+        fn default_headers() -> HeaderMap {
+            [
+                ("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"),
+                ("Connection", "keep-alive"),
+                ("sec-ch-ua-platform", "\"macOS\""),
+                ("appid", "5"),
+                ("sec-ch-ua", "\"Google Chrome\";v=\"135\", \"Not-A.Brand\";v=\"8\", \"Chromium\";v=\"135\""),
+                ("sec-ch-ua-mobile", "?0"),
+                ("uni-client-ver", "12040"),
+                ("Accept", "*/*"),
+                ("Sec-Fetch-Site", "same-origin"),
+                ("Sec-Fetch-Mode", "cors"),
+                ("Sec-Fetch-Dest", "empty"),
+                ("Referer", "https://ucontent.unipus.cn/"),
+                ("Accept-Language", "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7,ja-JP;q=0.6,ja;q=0.5,sd-PK;q=0.4,sd;q=0.3"),
+            ]
+                .into_iter()
+                .map(|(k, v)| {
+                    (
+                        HeaderName::from_bytes(k.as_bytes()).unwrap(),
+                        HeaderValue::from_str(v).unwrap(),
+                    )
+                })
+                .collect()
+        }
+
         let cookie_path = format!("cookies/cookies-{}.jsonl", username);
         let path = Path::new(&cookie_path);
 
@@ -102,7 +127,7 @@ impl Unipus {
         };
 
         let client = Client::builder()
-            .default_headers(headers)
+            .default_headers(default_headers())
             .cookie_provider(std::sync::Arc::clone(&cookie_store))
             .danger_accept_invalid_certs(true)
             .build()
@@ -124,7 +149,7 @@ impl Unipus {
         }
     }
 
-    pub async fn get_home_page_and_check_login(&mut self) -> Result<(String, bool), UnipusError> {
+    pub async fn check_login_and_setup_session(&mut self) -> Result<(String, bool), UnipusError> {
         let response = self
             .client
             .get("https://u.unipus.cn/user/student")
@@ -168,14 +193,21 @@ impl Unipus {
             .map(|element| element.text().collect::<String>().trim().to_string())
             .unwrap();
 
-        let re = Regex::new(r#"token:.*?"(.+?)""#).unwrap();
+        let token = Self::extract_js_variable(&html, "token");
+        let openid = Self::extract_js_variable(&html, "openId");
+        let websocket_url = Self::extract_js_variable(&html, "wsURL");
+        Ok(SessionInfo { name, token, openid, websocket_url })
+    }
+
+    fn extract_js_variable(html: &&str, field_name: &str) -> String {
+        let re = Regex::new(format!(r#"{}:.*?"(.+?)""#, field_name).as_str()).unwrap();
         let caps = re.captures(&html).unwrap();
         let token = caps.get(1).unwrap().as_str().to_string();
-        Ok(SessionInfo { name, token })
+        token
     }
 
     pub async fn login(
-        &self,
+        &mut self,
         username: &str,
         password: &str,
         captcha: Option<&str>,
@@ -186,7 +218,7 @@ impl Unipus {
     }
 
     fn login_internal<'a>(
-        &'a self,
+        &'a mut self,
         username: &'a str,
         password: &'a str,
         captcha: Option<&'a str>,
@@ -194,12 +226,12 @@ impl Unipus {
     ) -> Pin<Box<dyn Future<Output = Result<Option<SsoLoginResponse>, UnipusError>> + Send + 'a>>
     {
         Box::pin(async move {
-            let _ = self.client.get("https://u.unipus.cn/t?p=https://sso.unipus.cn/sso/login?service=https%3A%2F%2Fu.unipus.cn%2Fuser%2Fcomm%2Flogin%3Fschool_id%3D")
+            self.client.get("https://u.unipus.cn/t?p=https://sso.unipus.cn/sso/login?service=https%3A%2F%2Fu.unipus.cn%2Fuser%2Fcomm%2Flogin%3Fschool_id%3D")
                 .send().await?;
 
-            let _ = self
+            self
                 .client
-                .get("https://sso.unipus.cn/sso/3.0/sso/server_time")
+                .post("https://sso.unipus.cn/sso/3.0/sso/server_time")
                 .send()
                 .await?;
 
@@ -216,7 +248,6 @@ impl Unipus {
 
             let response = self.client.post(url).json(&payload).send().await?;
             let data: SsoLoginResponse = response.json().await?;
-            // println!("响应0：{:?}", data);
 
             if data.code == "1506" {
                 let captcha_response = self.get_captcha().await?;
@@ -255,6 +286,7 @@ impl Unipus {
                 let ticket = data.rs.as_ref().unwrap().service_ticket.as_str();
                 let success = self.login_use_ticket(ticket).await?;
                 if success {
+                    self.check_login_and_setup_session().await?;
                     Ok(None)
                 } else {
                     Err(UnipusError::new("ticket登录失败"))
@@ -317,6 +349,40 @@ impl Unipus {
 
         let course = serde_json::from_str(data["course"].as_str().unwrap()).unwrap();
         Ok((data, course))
+    }
+
+    #[allow(dead_code)]
+    pub async fn get_course_progress_leaf(
+        &self,
+        tutorial_id: &str,
+        leaf: &str,
+    ) -> Result<(serde_json::Value), UnipusError> {
+        let url = format!(
+            "https://ucontent.unipus.cn/course/api/v2/course_progress/{}/{}/{}/default/",
+            tutorial_id,
+            leaf,
+            self.session_info.as_ref().unwrap().openid
+        );
+        let response = self.client.get(&url).send().await?;
+        let data: serde_json::Value = response.json().await?;
+
+        Ok(data)
+    }
+
+    #[allow(dead_code)]
+    pub async fn get_course_progress(
+        &self,
+        tutorial_id: &str,
+    ) -> Result<(serde_json::Value), UnipusError> {
+        let url = format!(
+            "https://ucontent.unipus.cn/course/api/v2/course_progress/{}/{}/default/",
+            tutorial_id,
+            self.session_info.as_ref().unwrap().openid
+        );
+        let response = self.client.get(&url).send().await?;
+        let data: serde_json::Value = response.json().await?;
+
+        Ok(data)
     }
 
     fn save_cookies(&self) {
