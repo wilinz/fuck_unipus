@@ -109,10 +109,18 @@ fn traversal_courses(
                 .and_then(|s| s.get("pass"))
                 .and_then(|p| p.as_i64())
                 .unwrap_or(0);
-            if pass == 1 {
+
+            let required = leaf.get("strategies")
+                .and_then(|s| s.get("required"))
+                .and_then(|p| p.as_bool())
+                .unwrap_or(false);
+
+            if pass == 1{
                 "✅"
-            } else {
+            } else if required {
                 "🕓"
+            } else {
+                "🚫"
             }
         } else {
             "🚫"
