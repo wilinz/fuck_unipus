@@ -162,7 +162,7 @@ impl Unipus {
                 file.write_all(&image_data).await.unwrap();
 
                 println!(
-                    "---------查看 captcha.png，或者粘贴验证码 data-url 到浏览器 -----------"
+                    "---------查看 tmp/captcha.png，或者粘贴验证码 data-url 到浏览器 -----------"
                 );
 
                 let captcha = input_trim("请输入验证码：");
