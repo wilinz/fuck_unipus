@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::io::BufWriter;
 use std::path::Path;
 use std::pin::Pin;
+use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use http::{HeaderName, HeaderValue};
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
@@ -28,6 +29,7 @@ use tokio::io::AsyncWriteExt;
 use url::Url;
 use crate::http::auth_middleware::AuthHeaderMiddleware;
 use crate::http::decrypt_middleware::DecryptMiddleware;
+use crate::http::random_headers::{get_random_platform_info, get_random_user_agent};
 
 struct TokenState {
     token: Option<String>,
@@ -44,30 +46,39 @@ pub struct Unipus {
 
 impl Unipus {
     pub fn new(username: &str) -> Self {
-        fn default_headers() -> HeaderMap {
-            [
-                ("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"),
+
+        pub fn default_headers() -> HeaderMap {
+            let platform_info = get_random_platform_info();
+            let user_agent = get_random_user_agent(&platform_info);
+            let sec_ch_ua_mobile = if platform_info.is_mobile { "?1" } else { "?0" };
+            let sec_ch_ua_platform = format!("\"{}\"", platform_info.sec_ch_ua_platform);
+
+            let mut headers = vec![
+                ("User-Agent", user_agent.as_str()),
                 ("Connection", "keep-alive"),
-                ("sec-ch-ua-platform", "\"macOS\""),
+                ("sec-ch-ua-platform", sec_ch_ua_platform.as_str()),
                 ("appid", "5"),
                 ("sec-ch-ua", "\"Google Chrome\";v=\"135\", \"Not-A.Brand\";v=\"8\", \"Chromium\";v=\"135\""),
-                ("sec-ch-ua-mobile", "?0"),
+                ("sec-ch-ua-mobile", sec_ch_ua_mobile),
                 ("uni-client-ver", "12040"),
                 ("Accept", "*/*"),
                 ("Sec-Fetch-Site", "same-origin"),
                 ("Sec-Fetch-Mode", "cors"),
                 ("Sec-Fetch-Dest", "empty"),
                 ("Referer", "https://ucontent.unipus.cn/"),
-                ("Accept-Language", "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7,ja-JP;q=0.6,ja;q=0.5,sd-PK;q=0.4,sd;q=0.3"),
-            ]
-                .into_iter()
-                .map(|(k, v)| {
-                    (
-                        HeaderName::from_bytes(k.as_bytes()).unwrap(),
-                        HeaderValue::from_str(v).unwrap(),
-                    )
-                })
-                .collect()
+                (
+                    "Accept-Language",
+                    "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7,ja-JP;q=0.6,ja;q=0.5,sd-PK;q=0.4,sd;q=0.3",
+                ),
+            ];
+
+            let mut header_map = HeaderMap::new();
+            for (key, value) in headers {
+                let key = HeaderName::from_str(key).unwrap();
+                let value = HeaderValue::from_str(value).unwrap();
+                header_map.insert(key, value);
+            }
+            header_map
         }
 
         let cookie_path = format!("cookies/cookies-{}.jsonl", username);
