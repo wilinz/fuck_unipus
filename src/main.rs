@@ -5,11 +5,11 @@ use fuck_unipus::utils::input::{input, input_password_trim};
 async fn main() {
     // Create Unipus instance
     let username = input("请输入用户名：");
-    let unipus = Unipus::new(&username);
-    let (html, is_authorized) = unipus.get_home_page_and_check_login().await.unwrap();
-    let student_name = unipus.extract_name_form_home_page(&html);
+    let mut unipus = Unipus::new(&username);
+    let (_, is_authorized) = unipus.get_home_page_and_check_login().await.unwrap();
     if is_authorized {
-        println!("{} 用户当前已登录", &student_name.unwrap_or_default());
+        println!("{} 用户当前已登录", &unipus.session_info.as_ref().unwrap().name);
+        println!("token: {}", &unipus.session_info.as_ref().unwrap().token);
     }
     if !is_authorized {
         let password = input_password_trim("请输入密码：");
@@ -28,5 +28,12 @@ async fn main() {
     let (_, data) = unipus.get_course_detail(&tutorial_id).await.unwrap();
 
     println!("课程详细信息：{}", serde_json::to_string_pretty(&data).unwrap());
+
+    let leaf = input("请输入节点 id: ");
+
+    let leaf_content = unipus.get_content(&tutorial_id, &leaf).await.unwrap();
+
+    println!("节点内容：{}", &leaf_content);
+
 }
 

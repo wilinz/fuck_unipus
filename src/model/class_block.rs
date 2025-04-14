@@ -15,5 +15,7 @@ pub struct Course {
 pub struct ClassBlock {
     pub class_name: String,
     pub date_range: String,
+    pub start_date: String,
+    pub end_date: String,
     pub courses: Vec<Course>,
 }

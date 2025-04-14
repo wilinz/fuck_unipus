@@ -1,4 +1,5 @@
 use scraper::{Html, Selector};
+use regex::Regex;
 use crate::model::class_block::{ClassBlock, Course};
 
 pub fn parse_courses_to_json(html: &str) -> Vec<ClassBlock> {
@@ -72,9 +73,17 @@ pub fn parse_courses_to_json(html: &str) -> Vec<ClassBlock> {
             });
         }
 
+        // Use regex to extract the date
+        let re = Regex::new(r"(\d{1,4}\.\d{1,2}\.\d{1,2})\s.+?\s+(\d{1,4}\.\d{1,2}\.\d{1,2})").unwrap();
+        let caps = re.captures(&class_date).unwrap();
+        let start_date = caps.get(1).unwrap().as_str().replace(".", "-");
+        let end_date = caps.get(2).unwrap().as_str().replace(".", "-");
+
         result.push(ClassBlock {
             class_name,
             date_range: class_date,
+            start_date: start_date,
+            end_date: end_date,
             courses: course_list,
         });
     }
