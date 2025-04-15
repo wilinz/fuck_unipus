@@ -6,6 +6,9 @@ use reqwest::{
 
 use crate::core::html_parser;
 use crate::error::unipus::UnipusError;
+use crate::http::auth_middleware::AuthHeaderMiddleware;
+use crate::http::decrypt_middleware::DecryptMiddleware;
+use crate::http::random_headers::{get_random_platform_info, get_random_user_agent};
 use crate::model::captcha_response::CaptchaResponse;
 use crate::model::class_block::ClassBlock;
 use crate::model::session_info::SessionInfo;
@@ -13,23 +16,21 @@ use crate::model::sso_login_response::SsoLoginResponse;
 use crate::utils::input::input_trim;
 use base64::engine::general_purpose::STANDARD;
 use chrono::NaiveDate;
+use http::{HeaderName, HeaderValue};
 use regex::Regex;
 use reqwest_cookie_store::CookieStoreMutex;
+use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use scraper::{Html, Selector};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::BufWriter;
 use std::path::Path;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
-use http::{HeaderName, HeaderValue};
-use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use url::Url;
-use crate::http::auth_middleware::AuthHeaderMiddleware;
-use crate::http::decrypt_middleware::DecryptMiddleware;
-use crate::http::random_headers::{get_random_platform_info, get_random_user_agent};
 
 struct TokenState {
     token: Option<String>,
@@ -41,12 +42,11 @@ pub struct Unipus {
     cookie_store: Arc<CookieStoreMutex>,
     cookie_path: String,
     pub session_info: Option<SessionInfo>,
-    token_state: Arc<RwLock<TokenState>>,  // 用 RwLock 包装
+    token_state: Arc<RwLock<TokenState>>, // 用 RwLock 包装
 }
 
 impl Unipus {
     pub fn new(username: &str) -> Self {
-
         pub fn default_headers() -> HeaderMap {
             let platform_info = get_random_platform_info();
             let user_agent = get_random_user_agent(&platform_info);
@@ -58,7 +58,10 @@ impl Unipus {
                 ("Connection", "keep-alive"),
                 ("sec-ch-ua-platform", sec_ch_ua_platform.as_str()),
                 ("appid", "5"),
-                ("sec-ch-ua", "\"Google Chrome\";v=\"135\", \"Not-A.Brand\";v=\"8\", \"Chromium\";v=\"135\""),
+                (
+                    "sec-ch-ua",
+                    "\"Google Chrome\";v=\"135\", \"Not-A.Brand\";v=\"8\", \"Chromium\";v=\"135\"",
+                ),
                 ("sec-ch-ua-mobile", sec_ch_ua_mobile),
                 ("uni-client-ver", "12040"),
                 ("Accept", "*/*"),
@@ -177,11 +180,54 @@ impl Unipus {
         Ok((text, is_authorized))
     }
 
-    pub async fn get_course_leaf_content(&self, tutorial_id: &str, leaf: &str) -> Result<String, UnipusError> {
-        let url = format!("https://ucontent.unipus.cn/course/api/v3/content/{tutorial_id}/{leaf}/default/");
+    pub async fn get_course_leaf_content(
+        &self,
+        tutorial_id: &str,
+        leaf: &str,
+    ) -> Result<Value, UnipusError> {
+        let url = format!(
+            "https://ucontent.unipus.cn/course/api/v3/content/{tutorial_id}/{leaf}/default/"
+        );
         let response = self.client.get(url).send().await?;
-        let text = response.text().await?;
-        Ok(text)
+        let json: Value = response.json().await?;
+        Ok(json)
+    }
+
+    pub async fn get_course_summary(
+        &self,
+        tutorial_id: &str,
+        leaf: &str,
+    ) -> Result<Value, UnipusError> {
+        let url = format!(
+            "https://ucontent.unipus.cn/course/api/pc/summary/{tutorial_id}/{leaf}/default/"
+        );
+        let response = self.client.get(url).send().await?;
+        let json: Value = response.json().await?;
+        Ok(json)
+    }
+
+    pub async fn post_progress(&self, tutorial_id: &str, leaf: &str) -> Result<Value, UnipusError> {
+        let rid = format!("flowengine:studyStatus:1:{leaf}");
+
+        // Construct the JSON payload using `serde_json::json!`
+        let payload = json!({
+            "status": "1",
+            "rid": rid,
+            "groupId": leaf,
+            "version": "default"
+        });
+
+        let url = format!("https://ucontent.unipus.cn/api/mobile/user_group/{tutorial_id}/{leaf}/progress/");
+
+        let response = self
+            .client
+            .post(&url)
+            .json(&payload) // Send JSON body
+            .send()
+            .await?;
+
+        let json: Value = response.json().await?;
+        Ok(json)
     }
 
     fn update_token_state(&self, token: Option<String>) {
@@ -207,7 +253,12 @@ impl Unipus {
         let token = Self::extract_js_variable(&html, "token");
         let openid = Self::extract_js_variable(&html, "openId");
         let websocket_url = Self::extract_js_variable(&html, "wsURL");
-        Ok(SessionInfo { name, token, openid, websocket_url })
+        Ok(SessionInfo {
+            name,
+            token,
+            openid,
+            websocket_url,
+        })
     }
 
     fn extract_js_variable(html: &&str, field_name: &str) -> String {
@@ -240,8 +291,7 @@ impl Unipus {
             self.client.get("https://u.unipus.cn/t?p=https://sso.unipus.cn/sso/login?service=https%3A%2F%2Fu.unipus.cn%2Fuser%2Fcomm%2Flogin%3Fschool_id%3D")
                 .send().await?;
 
-            self
-                .client
+            self.client
                 .post("https://sso.unipus.cn/sso/3.0/sso/server_time")
                 .send()
                 .await?;
@@ -392,6 +442,26 @@ impl Unipus {
         let response = self.client.get(&url).send().await?;
         let data: serde_json::Value = response.json().await?;
 
+        Ok(data)
+    }
+
+    #[allow(dead_code)]
+    pub async fn get_course_leaf_questions(
+        &self,
+        tutorial_id: &str,
+        leaf: &str,
+    ) -> Result<(serde_json::Value), UnipusError> {
+        let url = format!(
+            "https://ucontent.unipus.cn/course/api/pc/group/{}/{}/default/",
+            tutorial_id, leaf
+        );
+        let response = self.client.get(&url).send().await?;
+        let data: serde_json::Value = response.json().await?;
+        let group_str = data.get("group").and_then(|g| g.as_str());
+        if group_str.is_some() {
+            let group: Value = serde_json::from_str(group_str.unwrap())?;
+            return Ok(group);
+        }
         Ok(data)
     }
 

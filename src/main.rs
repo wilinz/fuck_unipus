@@ -97,7 +97,6 @@ async fn main() {
     println!("节点内容：{}", &leaf_content);
 }
 
-/// 把 name 过滤成合法的文件夹名：只保留字母数字、-、_、空格，其它替换为下划线
 fn sanitize_filename(name: &str) -> String {
     name.chars()
         .map(|c| {
@@ -112,7 +111,6 @@ fn sanitize_filename(name: &str) -> String {
         .replace(' ', "_")
 }
 
-/// 对外暴露的函数：指定一个根目录，然后启动递归
 pub async fn traversal_courses_to_fs(
     units: &[Value],
     prefix: Vec<usize>,
@@ -122,9 +120,7 @@ pub async fn traversal_courses_to_fs(
     tree_prefix: &str,
     root_dir: &Path,
 ) -> Result<(), UnipusError> {
-    // 创建根目录
     fs::create_dir_all(root_dir).await?;
-    // 调用内部递归
     traversal_courses_inner(
         units,
         prefix,
@@ -133,8 +129,7 @@ pub async fn traversal_courses_to_fs(
         leafs_progress,
         tree_prefix,
         root_dir.to_path_buf(),
-    )
-        .await
+    ).await
 }
 
 #[async_recursion]
@@ -149,66 +144,73 @@ async fn traversal_courses_inner(
 ) -> Result<(), UnipusError> {
     for (i, unit) in units.iter().enumerate() {
         let is_last = i + 1 == units.len();
-
-        // 维护你的数字前缀（可用于打印或别的逻辑）
         let mut current_prefix = prefix.clone();
         current_prefix.push(i + 1);
 
-        let name = unit
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or("<Unnamed>");
+        let name = unit.get("name").and_then(Value::as_str).unwrap_or("<Unnamed>");
         let url = unit.get("url").and_then(Value::as_str).unwrap_or("");
 
-        // 计算状态
-        let status_str = if let Some(leaf) = leafs_progress.get(url) {
-            let pass = leaf
-                .get("state")
-                .and_then(|s| s.get("pass"))
-                .and_then(|p| p.as_i64())
-                .unwrap_or(0);
-            let required = leaf
-                .get("strategies")
-                .and_then(|s| s.get("required"))
-                .and_then(|p| p.as_bool())
-                .unwrap_or(false);
-            if pass == 1 {
-                "✅"
-            } else if required {
-                "Fucking... 🕓"
-            } else {
-                "🚫"
+        let status_str = match leafs_progress.get(url) {
+            Some(leaf) => {
+                let pass = leaf.get("state").and_then(|s| s.get("pass")).and_then(|p| p.as_i64()).unwrap_or(0);
+                let required = leaf.get("strategies").and_then(|s| s.get("required")).and_then(|p| p.as_bool()).unwrap_or(false);
+                if pass == 1 {
+                    "✅"
+                } else if required {
+                    "Fucking... 🕓"
+                } else {
+                    "🚫"
+                }
             }
-        } else {
-            ""
+            None => "",
         };
 
-        // 打印树形结构
         let branch = if is_last { "└── " } else { "├── " };
         println!("{}{}{} {}", tree_prefix, branch, name, status_str);
 
-        // 在文件系统中，为当前节点创建目录
-        let dir_name = sanitize_filename(name);
+        let dir_name = format!("{}.{}", i+1, sanitize_filename(name));
         let this_path = current_path.join(&dir_name);
         fs::create_dir_all(&this_path).await?;
 
-        // 如果需要重试，就抓 content 并写 content.txt
         if status_str == "Fucking... 🕓" {
-            let content = unipus.get_course_leaf_content(tutorial_id, url).await?;
-            let json : Value = serde_json::from_str(&content)?;
-            let content = serde_json::to_string_pretty(&json)?;
+            let Ok(content) = unipus.get_course_leaf_content(tutorial_id, url).await else {
+                eprintln!("获取内容失败：{}", url);
+                continue;
+            };
 
+            let Ok(questions) = unipus.get_course_leaf_questions(tutorial_id, url).await else {
+                eprintln!("获取问题失败：{}", url);
+                continue;
+            };
+
+            let Ok(content_pretty) = serde_json::to_string_pretty(&content) else {
+                eprintln!("格式化 JSON 失败：{}", url);
+                continue;
+            };
+
+            let Ok(questions_pretty) = serde_json::to_string_pretty(&questions) else {
+                eprintln!("格式化 JSON 失败：{}", url);
+                continue;
+            };
 
             let file_path = this_path.join("content.json5");
-            println!("Fucking content ... {}", file_path.display());
-            fs::write(&file_path, content).await?;
+            // let spaces = std::iter::repeat(' ').take(tree_prefix.len()).collect::<String>();
+            println!("{}{}Fucking content ... {}", tree_prefix, branch, file_path.display());
+            if let Err(e) = fs::write(&file_path, content_pretty).await {
+                eprintln!("写入失败 {}: {}", file_path.display(), e);
+            }
 
-            // 随机休眠防限流
-            let sleep_time = rng().random_range(3..=10);
-            tokio::time::sleep(Duration::from_secs(sleep_time)).await;
+            let file_path = this_path.join("questions.json5");
+            // let spaces = std::iter::repeat(' ').take(tree_prefix.len()).collect::<String>();
+            println!("{}{}Fucking questions ... {}", tree_prefix, branch, file_path.display());
+            if let Err(e) = fs::write(&file_path, questions_pretty).await {
+                eprintln!("写入失败 {}: {}", file_path.display(), e);
+            }
+
+            // let sleep_time = rng().random_range(3..=10);
+            // tokio::time::sleep(Duration::from_secs(sleep_time)).await;
         }
 
-        // 递归处理子节点
         if let Some(children) = unit.get("children").and_then(Value::as_array) {
             let new_prefix = if is_last {
                 format!("{}    ", tree_prefix)
@@ -223,8 +225,7 @@ async fn traversal_courses_inner(
                 leafs_progress,
                 &new_prefix,
                 this_path,
-            )
-                .await?;
+            ).await?;
         }
     }
 

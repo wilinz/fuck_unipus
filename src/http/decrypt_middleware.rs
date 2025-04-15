@@ -16,7 +16,11 @@ fn is_unipus_encrypted_response(url: &str, content_type: Option<&str>) -> bool {
 fn try_decrypt_content(json: &mut Value) -> Option<String> {
     let content_str = json.get("content").and_then(|v| v.as_str())?;
     let k_str = json.get("k").and_then(|v| v.as_str())?;
-    Some(decrypt_unipus_content(content_str, k_str).unwrap_or("".to_string()))
+    let decrypted = decrypt_unipus_content(content_str, k_str);
+    if decrypted.is_err() {
+        return None;
+    }
+    Some(decrypted.unwrap())
 }
 
 pub struct DecryptMiddleware;
@@ -61,8 +65,8 @@ impl Middleware for DecryptMiddleware {
             // if let Some(obj) = json.as_object_mut() {
             //     obj.insert("content".to_string(), Value::String(decrypted_content));
             // }
-        } else {
-            eprintln!("❌ 解密失败：无法解析 content 或密钥");
+        }else {
+            new_body = "{}".as_bytes().to_vec();
         }
 
         // 重建响应体

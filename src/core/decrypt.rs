@@ -44,8 +44,11 @@ fn aes_ecb_decrypt_from_hex(
 
 pub fn decrypt_unipus_content(content: &str, k: &str) -> Result<String, Box<dyn std::error::Error>> {
     let key = format!("1a2b3c4d{}", k);
-    let index = content.find(".").unwrap();
-    let cipher_hex = &content[index + 1..];
+    let index = content.find(".");
+    if index.is_none() {
+        return Err("content is invalid format".into());
+    }
+    let cipher_hex = &content[index.unwrap() + 1..];
     let decrypted_str = aes_ecb_decrypt_from_hex(cipher_hex, &key)?;
     Ok(decrypted_str)
 }
