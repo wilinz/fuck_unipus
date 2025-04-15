@@ -177,7 +177,7 @@ impl Unipus {
         Ok((text, is_authorized))
     }
 
-    pub async fn get_content(&self, tutorial_id: &str, leaf: &str) -> Result<String, UnipusError> {
+    pub async fn get_course_leaf_content(&self, tutorial_id: &str, leaf: &str) -> Result<String, UnipusError> {
         let url = format!("https://ucontent.unipus.cn/course/api/v3/content/{tutorial_id}/{leaf}/default/");
         let response = self.client.get(url).send().await?;
         let text = response.text().await?;
@@ -334,7 +334,6 @@ impl Unipus {
             NaiveDate::parse_from_str(&class.start_date, "%Y-%m-%d")
                 .unwrap_or_else(|_| NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
         });
-        println!("{}", serde_json::to_string_pretty(&data)?);
 
         Ok(data)
     }
